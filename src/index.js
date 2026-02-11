@@ -1,7 +1,6 @@
 require('dotenv').config();
 const http = require('http');
 const express = require('express');
-const cors = require('cors');
 const cron = require('node-cron');
 const connectDB = require('./config/db');
 const { processOverdueEMIs } = require('./services/emiCalculator');
@@ -22,13 +21,16 @@ const app = express();
 // Connect to MongoDB
 connectDB();
 
-// Middleware - CORS: allow all origins for API (web, mobile, etc.)
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
-  credentials: false,
-}));
+// CORS - must be first. Allow all origins for Railway + web/mobile clients
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept');
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  next();
+});
 
 // Webhook must use raw body for signature verification
 app.use('/api/webhooks/razorpay', express.raw({ type: 'application/json' }), webhookRoutes);
