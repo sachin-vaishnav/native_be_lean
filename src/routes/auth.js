@@ -1,9 +1,10 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 const User = require('../models/User');
 
 const router = express.Router();
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
 // Generate random 4-digit OTP
 const generateOTP = () => {
@@ -17,23 +18,18 @@ const generateToken = (id) => {
   });
 };
 
-// Send OTP via Gmail SMTP
+// Send OTP via Resend (works on Railway - SMTP is often blocked)
 const sendOTPViaEmail = async (email, otp) => {
-  const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: process.env.SMTP_EMAIL,
-      pass: process.env.SMTP_PASSWORD
-    }
-  });
+  if (!resend) throw new Error('RESEND_API_KEY not configured');
 
-  await transporter.sendMail({
-    from: process.env.SMTP_EMAIL,
-    to: email,
+  const { error } = await resend.emails.send({
+    from: process.env.RESEND_FROM || 'Loan App <onboarding@resend.dev>',
+    to: [email],
     subject: 'Your Loan App OTP',
-    text: `Your OTP for Loan App login is ${otp}. Valid for 5 minutes.`,
     html: `<p>Your OTP for Loan App login is <strong>${otp}</strong>.</p><p>Valid for 5 minutes.</p>`
   });
+
+  if (error) throw new Error(error.message);
 };
 
 // @route   POST /api/auth/send-otp
@@ -66,7 +62,7 @@ router.post('/send-otp', async (req, res) => {
     user.otpExpiry = otpExpiry;
     await user.save();
 
-    if (process.env.SMTP_EMAIL && process.env.SMTP_PASSWORD) {
+    if (resend) {
       await sendOTPViaEmail(emailStr, otp);
       res.json({ message: 'OTP sent to your email' });
     } else {
