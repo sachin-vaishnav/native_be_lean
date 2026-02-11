@@ -64,7 +64,10 @@ router.post('/send-otp', async (req, res) => {
     await user.save();
 
     if (resend) {
-      await sendOTPViaEmail(emailStr, otp);
+      await sendViaResend(emailStr, otp);
+      res.json({ message: 'OTP sent to your email' });
+    } else if (hasSmtp) {
+      await sendViaSmtp(emailStr, otp);
       res.json({ message: 'OTP sent to your email' });
     } else {
       console.log(`OTP for ${emailStr}: ${otp}`);
