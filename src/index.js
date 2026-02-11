@@ -1,6 +1,7 @@
 require('dotenv').config();
 const http = require('http');
 const express = require('express');
+const cors = require('cors');
 const cron = require('node-cron');
 const connectDB = require('./config/db');
 const { processOverdueEMIs } = require('./services/emiCalculator');
@@ -22,15 +23,13 @@ const app = express();
 connectDB();
 
 // CORS - must be first. Allow all origins for Railway + web/mobile clients
-app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept');
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-  next();
-});
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+  credentials: false,
+  optionsSuccessStatus: 200,
+}));
 
 // Webhook must use raw body for signature verification
 app.use('/api/webhooks/razorpay', express.raw({ type: 'application/json' }), webhookRoutes);
@@ -47,9 +46,14 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/payment', paymentRoutes);
 app.use('/api/notifications', notificationRoutes);
 
-// Health check
+// Root - simple 200 for proxies
+app.get('/', (req, res) => {
+  res.status(200).json({ status: 'OK', api: 'Loan App' });
+});
+
+// Health check - Railway uses this to verify deployment
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', message: 'Loan App API is running' });
+  res.status(200).json({ status: 'OK', message: 'Loan App API is running' });
 });
 
 // Config (for frontend - loan duration)
