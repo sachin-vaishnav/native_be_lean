@@ -22,8 +22,13 @@ const app = express();
 // Connect to MongoDB
 connectDB();
 
-// Middleware
-app.use(cors());
+// Middleware - CORS: allow all origins for API (web, mobile, etc.)
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+  credentials: false,
+}));
 
 // Webhook must use raw body for signature verification
 app.use('/api/webhooks/razorpay', express.raw({ type: 'application/json' }), webhookRoutes);
