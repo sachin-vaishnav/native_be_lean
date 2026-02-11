@@ -1,11 +1,22 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const nodemailer = require('nodemailer');
 const { Resend } = require('resend');
 const User = require('../models/User');
 
 const router = express.Router();
 const apiKey = process.env.RESEND_API_KEY ?? '';
 const resend = apiKey ? new Resend(apiKey) : null;
+
+// SMTP configuration
+const hasSmtp = process.env.SMTP_EMAIL && process.env.SMTP_PASSWORD;
+const smtpTransporter = hasSmtp ? nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.SMTP_EMAIL,
+    pass: process.env.SMTP_PASSWORD
+  }
+}) : null;
 
 // Generate random 4-digit OTP
 const generateOTP = () => {
@@ -31,6 +42,18 @@ const sendOTPViaEmail = async (email, otp) => {
   });
 
   if (error) throw new Error(error.message);
+};
+
+// Send OTP via SMTP (Gmail)
+const sendOTPViaSMTP = async (email, otp) => {
+  if (!smtpTransporter) throw new Error('SMTP not configured');
+
+  await smtpTransporter.sendMail({
+    from: process.env.SMTP_EMAIL,
+    to: email,
+    subject: 'Your Loan App OTP',
+    html: `<p>Your OTP for Loan App login is <strong>${otp}</strong>.</p><p>Valid for 5 minutes.</p>`
+  });
 };
 
 // @route   POST /api/auth/send-otp
@@ -63,11 +86,11 @@ router.post('/send-otp', async (req, res) => {
     user.otpExpiry = otpExpiry;
     await user.save();
 
-    if (resend) {
-      await sendViaResend(emailStr, otp);
+    if (hasSmtp) {
+      await sendOTPViaSMTP(emailStr, otp);
       res.json({ message: 'OTP sent to your email' });
-    } else if (hasSmtp) {
-      await sendViaSmtp(emailStr, otp);
+    } else if (resend) {
+      await sendOTPViaEmail(emailStr, otp);
       res.json({ message: 'OTP sent to your email' });
     } else {
       console.log(`OTP for ${emailStr}: ${otp}`);
