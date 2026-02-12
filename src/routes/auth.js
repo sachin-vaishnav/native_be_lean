@@ -41,7 +41,7 @@ const sendOTPViaEmail = async (email, otp) => {
 
   try {
     const info = await smtpTransporter.sendMail({
-      from: process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER || 'no-reply@loansnap.com',
+      from: `"LoanSnap" <${process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER || 'no-reply@loansnap.com'}>`,
       to: email,
       subject: 'Your LoanSnap OTP',
       html: `<div style="font-family: sans-serif; padding: 20px;">
