@@ -447,4 +447,66 @@ router.get('/dashboard', async (req, res) => {
   }
 });
 
+// @route   GET /api/admin/emis
+// @desc    Get EMIs with flexible filtering (status, date range, user)
+// @access  Admin
+router.get('/emis', async (req, res) => {
+  try {
+    const { status, startDate, endDate, userIds } = req.query;
+    let query = {};
+
+    // Filter by status (multi-select or single)
+    if (status) {
+      if (Array.isArray(status)) {
+        query.status = { $in: status };
+      } else {
+        query.status = status;
+      }
+    }
+
+    // Filter by date range
+    if (startDate || endDate) {
+      query.dueDate = {};
+      if (startDate) {
+        const start = new Date(startDate);
+        start.setHours(0, 0, 0, 0);
+        query.dueDate.$gte = start;
+      }
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        query.dueDate.$lte = end;
+      }
+    }
+
+    // Filter by users
+    if (userIds) {
+      const ids = Array.isArray(userIds) ? userIds : userIds.split(',');
+      if (ids.length > 0) {
+        query.userId = { $in: ids };
+      }
+    }
+
+    const emis = await EMI.find(query)
+      .populate('userId', 'email mobile name')
+      .populate('loanId', 'amount applicantName')
+      .sort({ dueDate: -1 });
+
+    // Calculate summary for the filtered data
+    const summary = {
+      total: emis.length,
+      paid: emis.filter(e => e.status === 'paid').length,
+      pending: emis.filter(e => e.status === 'pending').length,
+      overdue: emis.filter(e => e.status === 'overdue').length,
+      totalAmount: emis.reduce((sum, e) => sum + e.totalAmount, 0),
+      collectedAmount: emis.filter(e => e.status === 'paid').reduce((sum, e) => sum + e.totalAmount, 0)
+    };
+
+    res.json({ emis, summary });
+  } catch (error) {
+    console.error('Fetch EMIs error:', error);
+    res.status(500).json({ message: 'Error fetching EMIs' });
+  }
+});
+
 module.exports = router;
