@@ -152,4 +152,28 @@ router.post('/verify-otp', async (req, res) => {
   }
 });
 
+// @route   POST /api/auth/find-email
+// @desc    Find email by mobile number
+// @access  Public
+router.post('/find-email', async (req, res) => {
+  try {
+    const { mobile } = req.body;
+
+    if (!mobile) {
+      return res.status(400).json({ message: 'Mobile number is required' });
+    }
+
+    const user = await User.findOne({ mobile: String(mobile).trim() });
+
+    if (!user) {
+      return res.status(404).json({ message: 'This mobile number is not registered' });
+    }
+
+    res.json({ email: user.email });
+  } catch (error) {
+    console.error('Find email error:', error);
+    res.status(500).json({ message: 'Error finding email' });
+  }
+});
+
 module.exports = router;
