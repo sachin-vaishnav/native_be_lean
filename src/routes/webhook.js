@@ -13,7 +13,7 @@ const router = express.Router();
 router.post('/', (req, res) => {
   try {
     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
-    
+
     if (!webhookSecret) {
       console.error('RAZORPAY_WEBHOOK_SECRET not configured');
       return res.status(500).send('Webhook secret not configured');
@@ -130,6 +130,24 @@ async function handleSubscriptionCharged(payload) {
     await loan.save();
 
     console.log('Webhook: EMIs marked as paid -', pendingEmis.length, 'EMIs, Loan:', loanId);
+
+    // Alert Admin
+    try {
+      const Notification = require('../models/Notification');
+      const { emitNotification } = require('../socket');
+
+      const notif = await Notification.create({
+        type: 'emi_paid',
+        forAdmin: true,
+        userId: loan.userId,
+        loanId: loan._id,
+        title: 'EMI Paid (Autopay)',
+        body: `₹${amount.toLocaleString('en-IN')} collected via Autopay for ${loan.applicantName}`,
+      });
+      await emitNotification(notif);
+    } catch (notifErr) {
+      console.error('Webhook notification error:', notifErr);
+    }
   } catch (error) {
     console.error('handleSubscriptionCharged error:', error);
     throw error;

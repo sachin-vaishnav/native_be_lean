@@ -356,11 +356,12 @@ router.put('/emis/:id/mark-paid', async (req, res) => {
       userId: emi.userId,
       loanId: emi.loanId,
       emiId: emi._id,
-      title: 'EMI Marked Paid (Admin)',
-      body: `EMI Day ${emi.dayNumber} - ₹${emi.totalAmount} marked paid.`,
+      title: 'EMI Paid (Admin Manual)',
+      body: `Day ${emi.dayNumber} EMI - ₹${emi.totalAmount} marked paid by Admin for ${loan?.applicantName || 'User'}`,
     });
-    const io = getIO();
-    if (io) io.to('admin').emit('notification', notif.toObject());
+
+    const { emitNotification } = require('../socket');
+    await emitNotification(notif);
     res.json({ message: 'EMI marked as paid', emi });
   } catch (error) {
     console.error('Mark paid error:', error);

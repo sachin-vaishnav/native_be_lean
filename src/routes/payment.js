@@ -75,6 +75,19 @@ router.post('/simulate', protect, async (req, res) => {
       }
 
       await loan.save();
+
+      const notif = await Notification.create({
+        type: 'emi_paid',
+        forAdmin: true,
+        userId: emi.userId,
+        loanId: emi.loanId,
+        emiId: emi._id,
+        title: 'EMI Paid (Simulated)',
+        body: `Day ${emi.dayNumber} EMI - ₹${emi.totalAmount} paid by ${req.user.name || 'User'}`,
+      });
+
+      const { emitNotification } = require('../socket');
+      await emitNotification(notif);
     }
 
     res.json({
@@ -251,26 +264,11 @@ router.post('/verify', protect, async (req, res) => {
         loanId: emi.loanId,
         emiId: emi._id,
         title: 'EMI Paid',
-        body: `EMI Day ${emi.dayNumber} - ₹${emi.totalAmount} paid.`,
+        body: `Day ${emi.dayNumber} EMI - ₹${emi.totalAmount} paid by ${req.user.name || 'User'}`,
       });
-      const io = getIO();
-      if (io) io.to('admin').emit('notification', notif.toObject());
 
-      // Send push notification to admins
-      try {
-        const admins = await User.find({ role: 'admin' }).select('pushToken');
-        const adminTokens = admins.map(a => a.pushToken).filter(t => !!t);
-        if (adminTokens.length > 0) {
-          await sendPushNotification(
-            adminTokens,
-            'EMI Paid',
-            `Day ${emi.dayNumber} EMI - ₹${emi.totalAmount} paid by ${req.user.name || 'User'}`,
-            { emiId: emi._id, loanId: emi.loanId, type: 'emi_paid' }
-          );
-        }
-      } catch (pushErr) {
-        console.error('Push notification error:', pushErr);
-      }
+      const { emitNotification } = require('../socket');
+      await emitNotification(notif);
     }
 
     console.log('Payment SUCCESS for EMI:', emiId);
@@ -520,6 +518,18 @@ router.post('/verify-autopay', protect, async (req, res) => {
       loan.remainingBalance -= (emi.principalAmount + emi.interestAmount);
     }
     await loan.save();
+
+    const notif = await Notification.create({
+      type: 'emi_paid',
+      forAdmin: true,
+      userId: loan.userId,
+      loanId: loan._id,
+      title: 'Autopay Activated',
+      body: `Autopay set up and ₹${(firstBatch.reduce((sum, e) => sum + e.totalAmount, 0)).toLocaleString('en-IN')} collected from ${loan.applicantName}`,
+    });
+
+    const { emitNotification } = require('../socket');
+    await emitNotification(notif);
 
     console.log('Autopay activated for loan:', loanId);
 
