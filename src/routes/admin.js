@@ -424,11 +424,20 @@ router.get('/dashboard', async (req, res) => {
 
     const overdueEMIs = await EMI.countDocuments({ status: 'overdue' });
 
-    // Get recent loan applications
-    const recentApplications = await Loan.find({ status: 'pending' })
+    // Get pending applications
+    const pendingApplications = await Loan.find({ status: 'pending' })
       .populate('userId', 'email mobile name')
-      .sort({ createdAt: -1 })
-      .limit(5);
+      .sort({ createdAt: -1 });
+
+    // Get active loans
+    const activeLoanList = await Loan.find({ status: 'approved' })
+      .populate('userId', 'email mobile name')
+      .sort({ updatedAt: -1 });
+
+    // Get rejected loans
+    const rejectedApplications = await Loan.find({ status: 'rejected' })
+      .populate('userId', 'email mobile name')
+      .sort({ updatedAt: -1 });
 
     res.json({
       stats: {
@@ -439,7 +448,9 @@ router.get('/dashboard', async (req, res) => {
         todayPendingEMIs,
         overdueEMIs
       },
-      recentApplications
+      pendingApplications,
+      activeLoans: activeLoanList,
+      rejectedApplications
     });
   } catch (error) {
     console.error('Admin dashboard error:', error);
@@ -452,7 +463,8 @@ router.get('/dashboard', async (req, res) => {
 // @access  Admin
 router.get('/emis', async (req, res) => {
   try {
-    const { status, startDate, endDate, userIds } = req.query;
+    const { status, startDate, endDate, userIds, page = 1, limit = 20 } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
     let query = {};
 
     // Filter by status (multi-select or single)
@@ -482,27 +494,43 @@ router.get('/emis', async (req, res) => {
     // Filter by users
     if (userIds) {
       const ids = Array.isArray(userIds) ? userIds : userIds.split(',');
-      if (ids.length > 0) {
+      if (ids.length > 0 && ids[0] !== '') {
         query.userId = { $in: ids };
       }
     }
 
+    const total = await EMI.countDocuments(query);
     const emis = await EMI.find(query)
       .populate('userId', 'email mobile name')
       .populate('loanId', 'amount applicantName')
-      .sort({ dueDate: -1 });
+      .sort({ dueDate: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
 
-    // Calculate summary for the filtered data
+    // Calculate summary for the filtered data (total amounts, not just this page)
+    // For summary we might need another aggregation or just use the current emis if limit is large
+    // But usually summary is for the WHOLE filtered set.
+    const fullSet = await EMI.find(query).select('status totalAmount');
+
     const summary = {
-      total: emis.length,
-      paid: emis.filter(e => e.status === 'paid').length,
-      pending: emis.filter(e => e.status === 'pending').length,
-      overdue: emis.filter(e => e.status === 'overdue').length,
-      totalAmount: emis.reduce((sum, e) => sum + e.totalAmount, 0),
-      collectedAmount: emis.filter(e => e.status === 'paid').reduce((sum, e) => sum + e.totalAmount, 0)
+      total: fullSet.length,
+      paid: fullSet.filter(e => e.status === 'paid').length,
+      pending: fullSet.filter(e => e.status === 'pending').length,
+      overdue: fullSet.filter(e => e.status === 'overdue').length,
+      totalAmount: fullSet.reduce((sum, e) => sum + e.totalAmount, 0),
+      collectedAmount: fullSet.filter(e => e.status === 'paid').reduce((sum, e) => sum + e.totalAmount, 0)
     };
 
-    res.json({ emis, summary });
+    res.json({
+      emis,
+      summary,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    });
   } catch (error) {
     console.error('Fetch EMIs error:', error);
     res.status(500).json({ message: 'Error fetching EMIs' });
