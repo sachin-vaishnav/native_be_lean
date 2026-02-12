@@ -143,7 +143,13 @@ router.post('/verify-otp', async (req, res) => {
         email: user.email,
         mobile: user.mobile || '',
         name: user.name,
-        role: user.role
+        role: user.role,
+        address: user.address,
+        addresses: user.addresses || [],
+        aadhaarNumber: user.aadhaarNumber,
+        panNumber: user.panNumber,
+        aadhaarImage: user.aadhaarImage,
+        panImage: user.panImage
       }
     });
   } catch (error) {

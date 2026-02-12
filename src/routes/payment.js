@@ -6,12 +6,14 @@ const Loan = require('../models/Loan');
 const Notification = require('../models/Notification');
 const { getIO } = require('../socket');
 const { protect } = require('../middleware/auth');
+const User = require('../models/User');
+const { sendPushNotification } = require('../utils/pushNotifications');
 
 const router = express.Router();
 
 // Check if we have valid Razorpay keys
-const hasValidRazorpayKeys = process.env.RAZORPAY_KEY_ID && 
-  process.env.RAZORPAY_KEY_SECRET && 
+const hasValidRazorpayKeys = process.env.RAZORPAY_KEY_ID &&
+  process.env.RAZORPAY_KEY_SECRET &&
   process.env.RAZORPAY_KEY_ID.startsWith('rzp_');
 
 // Initialize Razorpay only if valid keys exist
@@ -29,52 +31,52 @@ if (hasValidRazorpayKeys) {
 router.post('/simulate', protect, async (req, res) => {
   try {
     const { emiId } = req.body;
-    
+
     if (!emiId) {
       return res.status(400).json({ message: 'EMI ID is required' });
     }
-    
+
     const emi = await EMI.findById(emiId);
-    
+
     if (!emi) {
       return res.status(404).json({ message: 'EMI not found' });
     }
-    
+
     // Check ownership
     if (emi.userId.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'Access denied' });
     }
-    
+
     // Check if already paid
     if (emi.status === 'paid') {
       return res.status(400).json({ message: 'EMI is already paid' });
     }
-    
+
     // Simulate successful payment
     emi.status = 'paid';
     emi.razorpayPaymentId = `sim_${Date.now()}`;
     emi.paidAt = new Date();
     await emi.save();
-    
+
     // Update loan totals
     const loan = await Loan.findById(emi.loanId);
     if (loan) {
       loan.totalPaid += emi.totalAmount;
       loan.remainingBalance -= (emi.principalAmount + emi.interestAmount);
-      
+
       // Check if loan is completed
       const pendingEMIs = await EMI.countDocuments({
         loanId: loan._id,
         status: { $ne: 'paid' }
       });
-      
+
       if (pendingEMIs === 0) {
         loan.status = 'completed';
       }
-      
+
       await loan.save();
     }
-    
+
     res.json({
       message: 'Payment successful (simulated)',
       emi: {
@@ -96,36 +98,36 @@ router.post('/simulate', protect, async (req, res) => {
 router.post('/create-order', protect, async (req, res) => {
   try {
     const { emiId } = req.body;
-    
+
     console.log('=== Create Order Request ===');
     console.log('EMI ID:', emiId);
     console.log('Razorpay configured:', !!razorpay);
-    
+
     if (!emiId) {
       return res.status(400).json({ message: 'EMI ID is required' });
     }
-    
+
     const emi = await EMI.findById(emiId);
-    
+
     if (!emi) {
       console.log('ERROR: EMI not found');
       return res.status(404).json({ message: 'EMI not found' });
     }
-    
+
     console.log('EMI found:', emi._id, 'Amount:', emi.totalAmount, 'Status:', emi.status);
-    
+
     // Check ownership
     if (emi.userId.toString() !== req.user._id.toString()) {
       console.log('ERROR: Access denied - user mismatch');
       return res.status(403).json({ message: 'Access denied' });
     }
-    
+
     // Check if already paid
     if (emi.status === 'paid') {
       console.log('ERROR: EMI already paid');
       return res.status(400).json({ message: 'EMI is already paid' });
     }
-    
+
     // If no valid Razorpay keys, return simulation mode indicator
     if (!razorpay) {
       console.log('Razorpay not configured - returning simulation mode');
@@ -137,7 +139,7 @@ router.post('/create-order', protect, async (req, res) => {
         message: 'Razorpay not configured. Use /api/payment/simulate endpoint.'
       });
     }
-    
+
     // Create Razorpay order
     const options = {
       amount: Math.round(emi.totalAmount * 100), // Amount in paise
@@ -153,15 +155,15 @@ router.post('/create-order', protect, async (req, res) => {
     if (process.env.RAZORPAY_CHECKOUT_CONFIG_ID) {
       options.checkout_config_id = process.env.RAZORPAY_CHECKOUT_CONFIG_ID;
     }
-    
+
     console.log('Creating Razorpay order with options:', options);
     const order = await razorpay.orders.create(options);
     console.log('Razorpay order created:', order.id);
-    
+
     // Store order ID in EMI
     emi.razorpayOrderId = order.id;
     await emi.save();
-    
+
     res.json({
       orderId: order.id,
       amount: order.amount,
@@ -180,81 +182,97 @@ router.post('/create-order', protect, async (req, res) => {
 router.post('/verify', protect, async (req, res) => {
   try {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, emiId } = req.body;
-    
+
     console.log('=== Payment Verification Request ===');
     console.log('Order ID:', razorpay_order_id);
     console.log('Payment ID:', razorpay_payment_id);
     console.log('Signature:', razorpay_signature);
     console.log('EMI ID:', emiId);
-    
+
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !emiId) {
       console.log('ERROR: Missing payment details');
       return res.status(400).json({ message: 'Missing payment details' });
     }
-    
+
     // Verify Razorpay signature
     const body = razorpay_order_id + '|' + razorpay_payment_id;
     const expectedSignature = crypto
       .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
       .update(body.toString())
       .digest('hex');
-    
+
     console.log('Expected signature:', expectedSignature);
     console.log('Received signature:', razorpay_signature);
-    
+
     const isAuthentic = expectedSignature === razorpay_signature;
-    
+
     if (!isAuthentic) {
       console.log('ERROR: Signature mismatch - verification failed');
       return res.status(400).json({ message: 'Payment verification failed' });
     }
-    
+
     console.log('Signature verified successfully');
-    
+
     // Update EMI status
     const emi = await EMI.findById(emiId);
-    
+
     if (!emi) {
       console.log('ERROR: EMI not found');
       return res.status(404).json({ message: 'EMI not found' });
     }
-    
+
     emi.status = 'paid';
     emi.razorpayPaymentId = razorpay_payment_id;
     emi.paidAt = new Date();
     await emi.save();
-    
+
     // Update loan totals
     const loan = await Loan.findById(emi.loanId);
     if (loan) {
       loan.totalPaid += emi.totalAmount;
       loan.remainingBalance -= (emi.principalAmount + emi.interestAmount);
-      
+
       // Check if loan is completed
       const pendingEMIs = await EMI.countDocuments({
         loanId: loan._id,
         status: { $ne: 'paid' }
       });
-      
+
       if (pendingEMIs === 0) {
         loan.status = 'completed';
       }
-      
+
       await loan.save();
-    
-    const notif = await Notification.create({
-      type: 'emi_paid',
-      forAdmin: true,
-      userId: emi.userId,
-      loanId: emi.loanId,
-      emiId: emi._id,
-      title: 'EMI Paid',
-      body: `EMI Day ${emi.dayNumber} - ₹${emi.totalAmount} paid.`,
-    });
-    const io = getIO();
-    if (io) io.to('admin').emit('notification', notif.toObject());
+
+      const notif = await Notification.create({
+        type: 'emi_paid',
+        forAdmin: true,
+        userId: emi.userId,
+        loanId: emi.loanId,
+        emiId: emi._id,
+        title: 'EMI Paid',
+        body: `EMI Day ${emi.dayNumber} - ₹${emi.totalAmount} paid.`,
+      });
+      const io = getIO();
+      if (io) io.to('admin').emit('notification', notif.toObject());
+
+      // Send push notification to admins
+      try {
+        const admins = await User.find({ role: 'admin' }).select('pushToken');
+        const adminTokens = admins.map(a => a.pushToken).filter(t => !!t);
+        if (adminTokens.length > 0) {
+          await sendPushNotification(
+            adminTokens,
+            'EMI Paid',
+            `Day ${emi.dayNumber} EMI - ₹${emi.totalAmount} paid by ${req.user.name || 'User'}`,
+            { emiId: emi._id, loanId: emi.loanId, type: 'emi_paid' }
+          );
+        }
+      } catch (pushErr) {
+        console.error('Push notification error:', pushErr);
+      }
     }
-    
+
     console.log('Payment SUCCESS for EMI:', emiId);
     res.json({
       message: 'Payment successful',
@@ -277,25 +295,25 @@ router.post('/verify', protect, async (req, res) => {
 router.post('/pay-multiple', protect, async (req, res) => {
   try {
     const { emiIds } = req.body;
-    
+
     if (!emiIds || !Array.isArray(emiIds) || emiIds.length === 0) {
       return res.status(400).json({ message: 'EMI IDs array is required' });
     }
-    
+
     // Get all EMIs
     const emis = await EMI.find({
       _id: { $in: emiIds },
       userId: req.user._id,
       status: { $ne: 'paid' }
     });
-    
+
     if (emis.length === 0) {
       return res.status(400).json({ message: 'No pending EMIs found' });
     }
-    
+
     // Calculate total amount
     const totalAmount = emis.reduce((sum, emi) => sum + emi.totalAmount, 0);
-    
+
     // Create Razorpay order
     const options = {
       amount: Math.round(totalAmount * 100),
@@ -306,9 +324,9 @@ router.post('/pay-multiple', protect, async (req, res) => {
         userId: req.user._id.toString()
       }
     };
-    
+
     const order = await razorpay.orders.create(options);
-    
+
     res.json({
       orderId: order.id,
       amount: order.amount,
@@ -328,38 +346,38 @@ router.post('/pay-multiple', protect, async (req, res) => {
 router.post('/setup-autopay', protect, async (req, res) => {
   try {
     const { loanId } = req.body;
-    
+
     console.log('=== Setup Autopay Request ===');
     console.log('Loan ID:', loanId);
     console.log('User:', req.user._id);
-    
+
     if (!loanId) {
       return res.status(400).json({ message: 'Loan ID is required' });
     }
-    
+
     if (!razorpay) {
       return res.status(400).json({ message: 'Razorpay not configured' });
     }
-    
+
     const loan = await Loan.findById(loanId);
-    
+
     if (!loan) {
       return res.status(404).json({ message: 'Loan not found' });
     }
-    
+
     // Check ownership
     if (loan.userId.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'Access denied' });
     }
-    
+
     // Check if autopay is already active
     if (loan.autopayEnabled && loan.autopayStatus === 'active') {
       return res.status(400).json({ message: 'Autopay is already active for this loan' });
     }
-    
+
     // Create or get Razorpay customer
     let customerId = loan.razorpayCustomerId;
-    
+
     if (!customerId) {
       const customer = await razorpay.customers.create({
         name: loan.applicantName,
@@ -373,21 +391,21 @@ router.post('/setup-autopay', protect, async (req, res) => {
       loan.razorpayCustomerId = customerId;
       console.log('Created Razorpay customer:', customerId);
     }
-    
+
     // Calculate remaining EMIs
     const pendingEMIs = await EMI.countDocuments({
       loanId: loan._id,
       status: { $ne: 'paid' }
     });
-    
+
     if (pendingEMIs === 0) {
       return res.status(400).json({ message: 'No pending EMIs for autopay' });
     }
-    
+
     // Create a subscription plan for this loan's daily EMI
     const planId = `plan_loan_${loan._id}`;
     let plan;
-    
+
     try {
       // Try to fetch existing plan
       plan = await razorpay.plans.fetch(planId);
@@ -409,7 +427,7 @@ router.post('/setup-autopay', protect, async (req, res) => {
       });
       console.log('Created new plan:', plan.id);
     }
-    
+
     // Create subscription - charges every 7 days, each charge = 7 EMIs
     const billingCycles = Math.ceil(pendingEMIs / 7);
     const subscription = await razorpay.subscriptions.create({
@@ -423,14 +441,14 @@ router.post('/setup-autopay', protect, async (req, res) => {
         userId: req.user._id.toString()
       }
     });
-    
+
     console.log('Created subscription:', subscription.id);
-    
+
     // Update loan with subscription details
     loan.razorpaySubscriptionId = subscription.id;
     loan.autopayStatus = 'pending';
     await loan.save();
-    
+
     res.json({
       subscriptionId: subscription.id,
       shortUrl: subscription.short_url,
@@ -452,47 +470,47 @@ router.post('/setup-autopay', protect, async (req, res) => {
 router.post('/verify-autopay', protect, async (req, res) => {
   try {
     const { razorpay_subscription_id, razorpay_payment_id, razorpay_signature, loanId } = req.body;
-    
+
     console.log('=== Verify Autopay Request ===');
     console.log('Subscription ID:', razorpay_subscription_id);
     console.log('Payment ID:', razorpay_payment_id);
     console.log('Loan ID:', loanId);
-    
+
     if (!razorpay_subscription_id || !razorpay_payment_id || !razorpay_signature || !loanId) {
       return res.status(400).json({ message: 'Missing autopay details' });
     }
-    
+
     // Verify signature
     const body = razorpay_payment_id + '|' + razorpay_subscription_id;
     const expectedSignature = crypto
       .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
       .update(body.toString())
       .digest('hex');
-    
+
     const isAuthentic = expectedSignature === razorpay_signature;
-    
+
     if (!isAuthentic) {
       console.log('Autopay signature verification failed');
       return res.status(400).json({ message: 'Autopay verification failed' });
     }
-    
+
     // Update loan
     const loan = await Loan.findById(loanId);
-    
+
     if (!loan) {
       return res.status(404).json({ message: 'Loan not found' });
     }
-    
+
     loan.autopayEnabled = true;
     loan.autopayStatus = 'active';
     await loan.save();
-    
+
     // Mark first 7 EMIs as paid (subscription charges 7 days at a time)
     const firstBatch = await EMI.find({
       loanId: loan._id,
       status: { $ne: 'paid' }
     }).sort({ dayNumber: 1 }).limit(7);
-    
+
     for (const emi of firstBatch) {
       emi.status = 'paid';
       emi.razorpayPaymentId = razorpay_payment_id;
@@ -502,9 +520,9 @@ router.post('/verify-autopay', protect, async (req, res) => {
       loan.remainingBalance -= (emi.principalAmount + emi.interestAmount);
     }
     await loan.save();
-    
+
     console.log('Autopay activated for loan:', loanId);
-    
+
     res.json({
       message: 'Autopay activated successfully',
       autopayStatus: 'active',
@@ -522,40 +540,40 @@ router.post('/verify-autopay', protect, async (req, res) => {
 router.post('/cancel-autopay', protect, async (req, res) => {
   try {
     const { loanId } = req.body;
-    
+
     console.log('=== Cancel Autopay Request ===');
     console.log('Loan ID:', loanId);
-    
+
     if (!loanId) {
       return res.status(400).json({ message: 'Loan ID is required' });
     }
-    
+
     const loan = await Loan.findById(loanId);
-    
+
     if (!loan) {
       return res.status(404).json({ message: 'Loan not found' });
     }
-    
+
     // Check ownership
     if (loan.userId.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'Access denied' });
     }
-    
+
     if (!loan.razorpaySubscriptionId) {
       return res.status(400).json({ message: 'No autopay subscription found' });
     }
-    
+
     // Cancel subscription in Razorpay
     if (razorpay) {
       await razorpay.subscriptions.cancel(loan.razorpaySubscriptionId);
       console.log('Cancelled subscription:', loan.razorpaySubscriptionId);
     }
-    
+
     // Update loan
     loan.autopayEnabled = false;
     loan.autopayStatus = 'cancelled';
     await loan.save();
-    
+
     res.json({
       message: 'Autopay cancelled successfully',
       loanId: loan._id
@@ -572,20 +590,20 @@ router.post('/cancel-autopay', protect, async (req, res) => {
 router.get('/autopay-status/:loanId', protect, async (req, res) => {
   try {
     const { loanId } = req.params;
-    
+
     const loan = await Loan.findById(loanId);
-    
+
     if (!loan) {
       return res.status(404).json({ message: 'Loan not found' });
     }
-    
+
     // Check ownership
     if (loan.userId.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'Access denied' });
     }
-    
+
     let subscriptionDetails = null;
-    
+
     if (loan.razorpaySubscriptionId && razorpay) {
       try {
         subscriptionDetails = await razorpay.subscriptions.fetch(loan.razorpaySubscriptionId);
@@ -593,7 +611,7 @@ router.get('/autopay-status/:loanId', protect, async (req, res) => {
         console.log('Could not fetch subscription:', e.message);
       }
     }
-    
+
     res.json({
       autopayEnabled: loan.autopayEnabled,
       autopayStatus: loan.autopayStatus,

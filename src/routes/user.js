@@ -145,7 +145,13 @@ router.get('/dashboard', protect, async (req, res) => {
         id: req.user._id,
         name: req.user.name,
         email: req.user.email,
-        mobile: req.user.mobile
+        mobile: req.user.mobile,
+        address: req.user.address,
+        addresses: req.user.addresses || [],
+        aadhaarNumber: req.user.aadhaarNumber,
+        panNumber: req.user.panNumber,
+        aadhaarImage: req.user.aadhaarImage,
+        panImage: req.user.panImage
       },
       stats: {
         totalLoans: loans.length,

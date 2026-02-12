@@ -6,6 +6,7 @@ const Notification = require('../models/Notification');
 const { getIO } = require('../socket');
 const { protect, adminOnly } = require('../middleware/auth');
 const { generateEMISchedule, getLoanStats, processOverdueEMIs } = require('../services/emiCalculator');
+const { sendPushNotification } = require('../utils/pushNotifications');
 
 const router = express.Router();
 
@@ -69,7 +70,7 @@ router.get('/users', async (req, res) => {
     const users = await User.find({ role: 'user' })
       .select('-otp -otpExpiry')
       .sort({ createdAt: -1 });
-    
+
     // Get loan count for each user
     const usersWithLoans = await Promise.all(users.map(async (user) => {
       const loanCount = await Loan.countDocuments({ userId: user._id });
@@ -80,7 +81,7 @@ router.get('/users', async (req, res) => {
         activeLoans
       };
     }));
-    
+
     res.json(usersWithLoans);
   } catch (error) {
     console.error('Get users error:', error);
@@ -114,13 +115,13 @@ router.get('/admins', async (req, res) => {
 router.get('/users/:id', async (req, res) => {
   try {
     const user = await User.findById(req.params.id).select('-otp -otpExpiry');
-    
+
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
-    
+
     const loans = await Loan.find({ userId: user._id }).sort({ createdAt: -1 });
-    
+
     // Get stats for each loan
     const loansWithStats = await Promise.all(loans.map(async (loan) => {
       if (loan.status === 'approved' || loan.status === 'completed') {
@@ -129,7 +130,7 @@ router.get('/users/:id', async (req, res) => {
       }
       return loan.toObject();
     }));
-    
+
     res.json({ user, loans: loansWithStats });
   } catch (error) {
     console.error('Get user details error:', error);
@@ -145,7 +146,7 @@ router.get('/loans/pending', async (req, res) => {
     const pendingLoans = await Loan.find({ status: 'pending' })
       .populate('userId', 'email mobile name')
       .sort({ createdAt: -1 });
-    
+
     res.json(pendingLoans);
   } catch (error) {
     console.error('Pending loans error:', error);
@@ -160,15 +161,15 @@ router.put('/loans/:id/approve', async (req, res) => {
   try {
     const { amount, totalDays } = req.body;
     const loan = await Loan.findById(req.params.id);
-    
+
     if (!loan) {
       return res.status(404).json({ message: 'Loan not found' });
     }
-    
+
     if (loan.status !== 'pending') {
       return res.status(400).json({ message: 'Loan is not in pending status' });
     }
-    
+
     // Admin can change amount (1000 - 100000)
     if (amount != null) {
       const amt = parseInt(amount);
@@ -177,7 +178,7 @@ router.put('/loans/:id/approve', async (req, res) => {
       }
       loan.amount = amt;
     }
-    
+
     // Admin can change total days (1 - 365)
     if (totalDays != null) {
       const days = parseInt(totalDays);
@@ -186,13 +187,13 @@ router.put('/loans/:id/approve', async (req, res) => {
       }
       loan.totalDays = days;
     }
-    
+
     loan.status = 'approved';
     loan.interestRate = 20; // Fixed 20% interest
-    
+
     // Generate EMI schedule (starts next day)
     await generateEMISchedule(loan);
-    
+
     const notif = await Notification.create({
       type: 'loan_approved',
       forAdmin: false,
@@ -203,6 +204,21 @@ router.put('/loans/:id/approve', async (req, res) => {
     });
     const io = getIO();
     if (io) io.to(`user:${loan.userId}`).emit('notification', notif.toObject());
+
+    // Send push notification to the user
+    try {
+      const user = await User.findById(loan.userId).select('pushToken');
+      if (user && user.pushToken) {
+        await sendPushNotification(
+          user.pushToken,
+          'Loan Approved',
+          `Your loan of ₹${loan.amount.toLocaleString('en-IN')} has been approved!`,
+          { loanId: loan._id, type: 'loan_approved' }
+        );
+      }
+    } catch (pushErr) {
+      console.error('Push notification error:', pushErr);
+    }
     res.json({
       message: 'Loan approved successfully',
       loan
@@ -219,20 +235,20 @@ router.put('/loans/:id/approve', async (req, res) => {
 router.put('/loans/:id/reject', async (req, res) => {
   try {
     const { reason } = req.body;
-    
+
     const loan = await Loan.findById(req.params.id);
-    
+
     if (!loan) {
       return res.status(404).json({ message: 'Loan not found' });
     }
-    
+
     if (loan.status !== 'pending') {
       return res.status(400).json({ message: 'Loan is not in pending status' });
     }
-    
+
     loan.status = 'rejected';
     await loan.save();
-    
+
     res.json({
       message: 'Loan rejected',
       loan
@@ -265,14 +281,14 @@ router.get('/emis/today', async (req, res) => {
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
-    
+
     const todayEMIs = await EMI.find({
       dueDate: { $gte: today, $lt: tomorrow }
     })
-    .populate('userId', 'email mobile name')
-    .populate('loanId', 'amount applicantName')
-    .sort({ status: -1 }); // Overdue first, then pending, then paid
-    
+      .populate('userId', 'email mobile name')
+      .populate('loanId', 'amount applicantName')
+      .sort({ status: -1 }); // Overdue first, then pending, then paid
+
     // Calculate summary
     const summary = {
       total: todayEMIs.length,
@@ -282,7 +298,7 @@ router.get('/emis/today', async (req, res) => {
       totalAmount: todayEMIs.reduce((sum, e) => sum + e.totalAmount, 0),
       collectedAmount: todayEMIs.filter(e => e.status === 'paid').reduce((sum, e) => sum + e.totalAmount, 0)
     };
-    
+
     res.json({ emis: todayEMIs, summary });
   } catch (error) {
     console.error('Today EMIs error:', error);
@@ -296,7 +312,7 @@ router.get('/emis/today', async (req, res) => {
 router.get('/emis/total', async (req, res) => {
   try {
     const allEMIs = await EMI.find();
-    
+
     const stats = {
       totalEMIs: allEMIs.length,
       paidEMIs: allEMIs.filter(e => e.status === 'paid').length,
@@ -307,7 +323,7 @@ router.get('/emis/total', async (req, res) => {
       pendingAmount: allEMIs.filter(e => e.status !== 'paid').reduce((sum, e) => sum + e.totalAmount, 0),
       totalPenalty: allEMIs.reduce((sum, e) => sum + (e.penaltyAmount || 0), 0)
     };
-    
+
     // Get loan stats
     const loans = await Loan.find();
     stats.totalLoans = loans.length;
@@ -315,7 +331,7 @@ router.get('/emis/total', async (req, res) => {
     stats.pendingLoans = loans.filter(l => l.status === 'pending').length;
     stats.totalDisbursed = loans.filter(l => l.status === 'approved' || l.status === 'completed')
       .reduce((sum, l) => sum + l.amount, 0);
-    
+
     res.json(stats);
   } catch (error) {
     console.error('Total EMIs error:', error);
@@ -331,12 +347,12 @@ router.put('/emis/:id/mark-paid', async (req, res) => {
     const emi = await EMI.findById(req.params.id);
     if (!emi) return res.status(404).json({ message: 'EMI not found' });
     if (emi.status === 'paid') return res.status(400).json({ message: 'EMI already paid' });
-    
+
     emi.status = 'paid';
     emi.paidAt = new Date();
     emi.razorpayPaymentId = `admin_${req.user._id}_${Date.now()}`;
     await emi.save();
-    
+
     const loan = await Loan.findById(emi.loanId);
     if (loan) {
       loan.totalPaid += emi.totalAmount;
@@ -345,7 +361,7 @@ router.put('/emis/:id/mark-paid', async (req, res) => {
       if (pendingCount === 0) loan.status = 'completed';
       await loan.save();
     }
-    
+
     const notif = await Notification.create({
       type: 'emi_paid',
       forAdmin: true,
@@ -371,10 +387,10 @@ router.delete('/loans/:id', async (req, res) => {
   try {
     const loan = await Loan.findById(req.params.id);
     if (!loan) return res.status(404).json({ message: 'Loan not found' });
-    
+
     await EMI.deleteMany({ loanId: loan._id });
     await Loan.findByIdAndDelete(loan._id);
-    
+
     res.json({ message: 'Loan deleted successfully' });
   } catch (error) {
     console.error('Delete loan error:', error);
@@ -391,29 +407,29 @@ router.get('/dashboard', async (req, res) => {
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
-    
+
     // Count stats
     const totalUsers = await User.countDocuments({ role: 'user' });
     const pendingLoans = await Loan.countDocuments({ status: 'pending' });
     const activeLoans = await Loan.countDocuments({ status: 'approved' });
-    
+
     const todayEMIs = await EMI.countDocuments({
       dueDate: { $gte: today, $lt: tomorrow }
     });
-    
+
     const todayPendingEMIs = await EMI.countDocuments({
       dueDate: { $gte: today, $lt: tomorrow },
       status: { $in: ['pending', 'overdue'] }
     });
-    
+
     const overdueEMIs = await EMI.countDocuments({ status: 'overdue' });
-    
+
     // Get recent loan applications
     const recentApplications = await Loan.find({ status: 'pending' })
       .populate('userId', 'email mobile name')
       .sort({ createdAt: -1 })
       .limit(5);
-    
+
     res.json({
       stats: {
         totalUsers,

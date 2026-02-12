@@ -6,6 +6,7 @@ const User = require('../models/User');
 const { getIO } = require('../socket');
 const { protect } = require('../middleware/auth');
 const { getLoanStats } = require('../services/emiCalculator');
+const { sendPushNotification } = require('../utils/pushNotifications');
 
 const router = express.Router();
 
@@ -15,36 +16,36 @@ const router = express.Router();
 router.post('/apply', protect, async (req, res) => {
   try {
     const { amount, name, mobile, address, aadhaarNumber, panNumber, addressIndex } = req.body;
-    
+
     // Validation
     if (!amount || !name || !mobile || !address || !aadhaarNumber || !panNumber) {
-      return res.status(400).json({ 
-        message: 'All fields are required: amount, name, mobile, address, aadhaarNumber, panNumber' 
+      return res.status(400).json({
+        message: 'All fields are required: amount, name, mobile, address, aadhaarNumber, panNumber'
       });
     }
-    
+
     const amountNum = parseInt(amount);
     if (isNaN(amountNum) || amountNum < 1000 || amountNum > 100000) {
-      return res.status(400).json({ 
-        message: 'Loan amount must be between ₹1,000 and ₹1,00,000' 
+      return res.status(400).json({
+        message: 'Loan amount must be between ₹1,000 and ₹1,00,000'
       });
     }
-    
+
     // Check if user has a pending loan application
-    const existingPending = await Loan.findOne({ 
-      userId: req.user._id, 
-      status: 'pending' 
+    const existingPending = await Loan.findOne({
+      userId: req.user._id,
+      status: 'pending'
     });
-    
+
     if (existingPending) {
-      return res.status(400).json({ 
-        message: 'You already have a pending loan application' 
+      return res.status(400).json({
+        message: 'You already have a pending loan application'
       });
     }
-    
+
     // Create loan application - default 100 days, admin can edit when approving
     const totalDays = 100;
-    
+
     const loan = new Loan({
       userId: req.user._id,
       amount: amountNum,
@@ -55,9 +56,9 @@ router.post('/apply', protect, async (req, res) => {
       applicantAadhaar: aadhaarNumber,
       applicantPan: panNumber
     });
-    
+
     await loan.save();
-    
+
     const notif = await Notification.create({
       type: 'loan_request',
       forAdmin: true,
@@ -68,7 +69,23 @@ router.post('/apply', protect, async (req, res) => {
     });
     const io = getIO();
     if (io) io.to('admin').emit('notification', notif.toObject());
-    
+
+    // Send push notification to all admins
+    try {
+      const admins = await User.find({ role: 'admin' }).select('pushToken');
+      const adminTokens = admins.map(a => a.pushToken).filter(t => !!t);
+      if (adminTokens.length > 0) {
+        await sendPushNotification(
+          adminTokens,
+          'New Loan Request',
+          `${name} applied for ₹${amountNum.toLocaleString('en-IN')}`,
+          { loanId: loan._id, type: 'loan_request' }
+        );
+      }
+    } catch (pushErr) {
+      console.error('Push notification error:', pushErr);
+    }
+
     // Update user profile and add address to saved addresses
     const userDoc = await User.findById(req.user._id);
     if (!userDoc.name) userDoc.name = name;
@@ -80,7 +97,7 @@ router.post('/apply', protect, async (req, res) => {
       userDoc.addresses.push(address);
     }
     await userDoc.save();
-    
+
     res.status(201).json({
       message: 'Loan application submitted successfully',
       loan: {
@@ -104,7 +121,7 @@ router.get('/my-loans', protect, async (req, res) => {
   try {
     const loans = await Loan.find({ userId: req.user._id })
       .sort({ createdAt: -1 });
-    
+
     res.json(loans);
   } catch (error) {
     console.error('My loans error:', error);
@@ -118,25 +135,25 @@ router.get('/my-loans', protect, async (req, res) => {
 router.get('/:id', protect, async (req, res) => {
   try {
     const loan = await Loan.findById(req.params.id);
-    
+
     if (!loan) {
       return res.status(404).json({ message: 'Loan not found' });
     }
-    
+
     // Check if user owns this loan or is admin
     if (loan.userId.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
       return res.status(403).json({ message: 'Access denied' });
     }
-    
+
     // Get EMI stats if loan is approved
     let stats = null;
     let emis = [];
-    
+
     if (loan.status === 'approved' || loan.status === 'completed') {
       stats = await getLoanStats(loan._id);
       emis = await EMI.find({ loanId: loan._id }).sort({ dayNumber: 1 });
     }
-    
+
     // For admin: include applicant's document images for verification
     let loanData = loan.toObject();
     if (req.user.role === 'admin') {
@@ -146,7 +163,7 @@ router.get('/:id', protect, async (req, res) => {
         loanData.panImage = applicant.panImage || '';
       }
     }
-    
+
     res.json({
       loan: loanData,
       stats,
