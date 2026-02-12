@@ -56,7 +56,7 @@ const generateEMISchedule = async (loan) => {
  */
 const processOverdueEMIs = async () => {
   const today = new Date();
-  today.setHours(23, 59, 59, 999);
+  today.setHours(0, 0, 0, 0);
 
   // Find all pending EMIs with due date before today
   const overdueEMIs = await EMI.find({
