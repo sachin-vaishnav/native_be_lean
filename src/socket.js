@@ -35,16 +35,72 @@ const initSocket = (httpServer) => {
   return io;
 };
 
+const { Expo } = require('expo-server-sdk');
+let expo = new Expo();
+
 const getIO = () => io;
 
-const emitNotification = (notification) => {
+const sendPushNotifications = async (tokens, title, body, data = {}) => {
+  if (!tokens || tokens.length === 0) return;
+
+  let messages = [];
+  for (let pushToken of tokens) {
+    if (!Expo.isExpoPushToken(pushToken)) {
+      console.error(`Push token ${pushToken} is not a valid Expo push token`);
+      continue;
+    }
+    messages.push({
+      to: pushToken,
+      sound: 'default',
+      title: title,
+      body: body,
+      data: data,
+    });
+  }
+
+  let chunks = expo.chunkPushNotifications(messages);
+
+  for (let chunk of chunks) {
+    try {
+      let ticketChunk = await expo.sendPushNotificationsAsync(chunk);
+      // console.log(ticketChunk);
+    } catch (error) {
+      console.error(error);
+    }
+  }
+};
+
+const emitNotification = async (notification) => {
   if (!io) return;
   const n = notification.toObject ? notification.toObject() : notification;
+
   if (n.forAdmin) {
     io.to('admin').emit('notification', n);
+
+    // Send push to admins
+    try {
+      const admins = await User.find({ role: 'admin', pushToken: { $exists: true, $ne: null } });
+      const tokens = admins.map(u => u.pushToken);
+      if (tokens.length > 0) {
+        await sendPushNotifications(tokens, n.title || 'Admin Alert', n.body, n);
+      }
+    } catch (e) {
+      console.error('Admin Push Error:', e);
+    }
+
   } else if (n.userId) {
     const uid = n.userId._id || n.userId;
     io.to(`user:${uid}`).emit('notification', n);
+
+    // Send push to user
+    try {
+      const user = await User.findById(uid);
+      if (user && user.pushToken) {
+        await sendPushNotifications([user.pushToken], n.title || 'LoanSnap', n.body, n);
+      }
+    } catch (e) {
+      console.error('User Push Error:', e);
+    }
   }
 };
 

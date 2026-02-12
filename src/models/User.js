@@ -60,6 +60,12 @@ const userSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  pushToken: {
+    type: String,
+    unique: true,
+    sparse: true,
+    trim: true
+  },
   createdAt: {
     type: Date,
     default: Date.now

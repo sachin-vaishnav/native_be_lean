@@ -62,7 +62,7 @@ app.get('/api/config', (req, res) => {
 });
 
 // Schedule cron job to process overdue EMIs every day at midnight
-cron.schedule('0 0 * * *', async () => {
+cron.schedule('10 0 * * *', async () => {
   console.log('Running daily overdue EMI processing...');
   try {
     await processOverdueEMIs();

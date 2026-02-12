@@ -12,15 +12,15 @@ const generateEMISchedule = async (loan) => {
   const startDate = new Date();
   startDate.setDate(startDate.getDate() + 1);
   startDate.setHours(0, 0, 0, 0);
-  
+
   const totalInterest = loan.amount * 0.20; // 20% of total amount
   const dailyPrincipal = Math.ceil(loan.amount / loan.totalDays);
   const dailyInterest = Math.ceil(totalInterest / loan.totalDays);
-  
+
   for (let day = 1; day <= loan.totalDays; day++) {
     const dueDate = new Date(startDate);
     dueDate.setDate(startDate.getDate() + day - 1);
-    
+
     const emi = new EMI({
       loanId: loan._id,
       userId: loan.userId,
@@ -32,13 +32,13 @@ const generateEMISchedule = async (loan) => {
       dueDate: dueDate,
       status: 'pending'
     });
-    
+
     emis.push(emi);
   }
-  
+
   // Bulk insert EMIs
   await EMI.insertMany(emis);
-  
+
   // Update loan start and end dates
   loan.startDate = startDate;
   const endDate = new Date(startDate);
@@ -46,7 +46,7 @@ const generateEMISchedule = async (loan) => {
   loan.endDate = endDate;
   loan.approvedAt = new Date();
   await loan.save();
-  
+
   return emis;
 };
 
@@ -57,32 +57,32 @@ const generateEMISchedule = async (loan) => {
 const processOverdueEMIs = async () => {
   const today = new Date();
   today.setHours(23, 59, 59, 999);
-  
+
   // Find all pending EMIs with due date before today
   const overdueEMIs = await EMI.find({
     status: 'pending',
     dueDate: { $lt: today }
   });
-  
+
   for (const emi of overdueEMIs) {
     // Mark as overdue
     emi.status = 'overdue';
-    
-    // Add penalty: 120 per day late (base EMI = principal + interest, penalty = 120 per overdue day)
+
+    // Add penalty: equal to interest amount per day late
     const baseAmount = emi.principalAmount + emi.interestAmount;
     const daysOverdue = Math.floor((today - emi.dueDate) / (24 * 60 * 60 * 1000)) || 1;
-    const penaltyPerDay = 120;
+    const penaltyPerDay = emi.interestAmount;
     emi.penaltyAmount = penaltyPerDay * daysOverdue;
     emi.totalAmount = baseAmount + emi.penaltyAmount;
-    
+
     await emi.save();
-    
+
     // Update loan penalty amount
     await Loan.findByIdAndUpdate(emi.loanId, {
       $inc: { penaltyAmount: emi.penaltyAmount }
     });
   }
-  
+
   console.log(`Processed ${overdueEMIs.length} overdue EMIs`);
   return overdueEMIs.length;
 };
@@ -94,7 +94,7 @@ const processOverdueEMIs = async () => {
  */
 const getLoanStats = async (loanId) => {
   const emis = await EMI.find({ loanId });
-  
+
   const stats = {
     totalEMIs: emis.length,
     paidEMIs: 0,
@@ -104,7 +104,7 @@ const getLoanStats = async (loanId) => {
     totalPending: 0,
     totalPenalty: 0
   };
-  
+
   emis.forEach(emi => {
     if (emi.status === 'paid') {
       stats.paidEMIs++;
@@ -118,7 +118,7 @@ const getLoanStats = async (loanId) => {
       stats.totalPenalty += emi.penaltyAmount;
     }
   });
-  
+
   return stats;
 };
 

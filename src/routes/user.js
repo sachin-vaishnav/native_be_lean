@@ -65,9 +65,9 @@ const uploadIfBase64 = async (value, folder = 'loan_app/documents') => {
 router.put('/profile', protect, async (req, res) => {
   try {
     const { name, mobile, address, addresses, aadhaarNumber, panNumber, aadhaarImage, panImage } = req.body;
-    
+
     const user = await User.findById(req.user._id);
-    
+
     if (name !== undefined) user.name = name;
     if (mobile !== undefined) user.mobile = String(mobile || '').trim();
     if (address !== undefined) user.address = address;
@@ -82,9 +82,9 @@ router.put('/profile', protect, async (req, res) => {
     if (panImage !== undefined) {
       user.panImage = (await uploadIfBase64(panImage)) || '';
     }
-    
+
     await user.save();
-    
+
     const userObj = user.toObject();
     delete userObj.otp;
     delete userObj.otpExpiry;
@@ -105,32 +105,32 @@ router.get('/dashboard', protect, async (req, res) => {
   try {
     // Get all loans for user
     const loans = await Loan.find({ userId: req.user._id });
-    
+
     // Get today's date range
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
-    
+
     // Get pending EMIs for today
     const todayEMIs = await EMI.find({
       userId: req.user._id,
       dueDate: { $gte: today, $lt: tomorrow },
       status: { $in: ['pending', 'overdue'] }
     }).populate('loanId', 'amount');
-    
+
     // Get all pending/overdue EMIs
     const pendingEMIs = await EMI.find({
       userId: req.user._id,
       status: { $in: ['pending', 'overdue'] }
     }).sort({ dueDate: 1 });
-    
+
     // Calculate totals
     let totalLoanAmount = 0;
     let totalPaid = 0;
     let remainingBalance = 0;
     let totalPenalty = 0;
-    
+
     loans.forEach(loan => {
       if (loan.status === 'approved' || loan.status === 'completed') {
         totalLoanAmount += loan.amount;
@@ -139,7 +139,7 @@ router.get('/dashboard', protect, async (req, res) => {
         totalPenalty += loan.penaltyAmount;
       }
     });
-    
+
     res.json({
       user: {
         id: req.user._id,
@@ -162,6 +162,22 @@ router.get('/dashboard', protect, async (req, res) => {
   } catch (error) {
     console.error('Dashboard error:', error);
     res.status(500).json({ message: 'Error fetching dashboard' });
+  }
+});
+
+// @route   POST /api/user/push-token
+// @desc    Update push token
+// @access  Private
+router.post('/push-token', protect, async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ message: 'Token required' });
+
+    await User.findByIdAndUpdate(req.user._id, { pushToken: token });
+    res.json({ message: 'Push token updated' });
+  } catch (error) {
+    console.error('Update push token error:', error);
+    res.status(500).json({ message: 'Error updating push token' });
   }
 });
 
