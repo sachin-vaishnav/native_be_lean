@@ -1,24 +1,13 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const nodemailer = require('nodemailer');
+const axios = require('axios');
 const User = require('../models/User');
 
 const router = express.Router();
 
-// SMTP configuration (Brevo)
-const hasSmtp = process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS;
-const smtpTransporter = hasSmtp ? nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: 465, // Use 465 for SSL/TLS as 587 is often blocked on cloud platforms
-  secure: true, // true for 465
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS
-  },
-  connectionTimeout: 10000, // 10 seconds
-  greetingTimeout: 10000,
-  socketTimeout: 10000
-}) : null;
+// Brevo API Configuration
+const BREVO_API_KEY = process.env.SMTP_PASS; // Using the key provided in SMTP_PASS
+const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
 
 // Generate random 4-digit OTP
 const generateOTP = () => {
@@ -32,28 +21,40 @@ const generateToken = (id) => {
   });
 };
 
-// Send OTP via SMTP (Brevo)
+// Send OTP via Brevo HTTP API (More reliable on cloud platforms like Render)
 const sendOTPViaEmail = async (email, otp) => {
-  if (!smtpTransporter) {
-    console.log('SMTP not configured - Printing OTP:', otp);
+  if (!BREVO_API_KEY) {
+    console.log('Brevo API Key not configured - Printing OTP:', otp);
     return;
   }
 
   try {
-    const info = await smtpTransporter.sendMail({
-      from: `"LoanSnap" <${process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER || 'no-reply@loansnap.com'}>`,
-      to: email,
+    const response = await axios.post(BREVO_API_URL, {
+      sender: {
+        name: "LoanSnap",
+        email: process.env.SMTP_FROM_EMAIL || "sachinswaminbt@gmail.com"
+      },
+      to: [{ email: email }],
       subject: 'Your LoanSnap OTP',
-      html: `<div style="font-family: sans-serif; padding: 20px;">
-          <h2>Login OTP</h2>
-          <p>Your OTP for LoanSnap is <strong>${otp}</strong>.</p>
-          <p>This OTP is valid for 5 minutes.</p>
+      htmlContent: `<div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px; max-width: 500px; margin: auto;">
+          <h2 style="color: #6B46C1; text-align: center;">LoanSnap Login</h2>
+          <p style="font-size: 16px; color: #333;">Your One-Time Password (OTP) for logging into your account is:</p>
+          <div style="background: #f4f4f4; padding: 15px; text-align: center; border-radius: 5px; margin: 20px 0;">
+            <span style="font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #6B46C1;">${otp}</span>
+          </div>
+          <p style="font-size: 14px; color: #666; text-align: center;">This OTP is valid for 5 minutes. Do not share it with anyone.</p>
         </div>`
+    }, {
+      headers: {
+        'api-key': BREVO_API_KEY,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      }
     });
-    console.log('Message sent: %s', info.messageId);
+    console.log('Email sent via Brevo API:', response.data.messageId);
   } catch (error) {
-    console.error('Error sending email:', error);
-    throw error;
+    console.error('Error sending email via Brevo API:', error.response?.data || error.message);
+    throw new Error('Failed to send OTP email');
   }
 };
 
@@ -87,8 +88,8 @@ router.post('/send-otp', async (req, res) => {
     user.otpExpiry = otpExpiry;
     await user.save();
 
-    // Send OTP via SMTP (Brevo)
-    if (hasSmtp) {
+    // Send OTP via Brevo HTTP API
+    if (BREVO_API_KEY) {
       await sendOTPViaEmail(emailStr, otp);
       res.json({ message: 'OTP sent to your email' });
     } else {
