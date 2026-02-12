@@ -67,24 +67,10 @@ router.post('/apply', protect, async (req, res) => {
       title: 'New Loan Request',
       body: `${name} applied for ₹${amountNum.toLocaleString('en-IN')}`,
     });
-    const io = getIO();
-    if (io) io.to('admin').emit('notification', notif.toObject());
 
-    // Send push notification to all admins
-    try {
-      const admins = await User.find({ role: 'admin' }).select('pushToken');
-      const adminTokens = admins.map(a => a.pushToken).filter(t => !!t);
-      if (adminTokens.length > 0) {
-        await sendPushNotification(
-          adminTokens,
-          'New Loan Request',
-          `${name} applied for ₹${amountNum.toLocaleString('en-IN')}`,
-          { loanId: loan._id, type: 'loan_request' }
-        );
-      }
-    } catch (pushErr) {
-      console.error('Push notification error:', pushErr);
-    }
+    // Use centralized notification emitter for both Socket and Push
+    const { emitNotification } = require('../socket');
+    await emitNotification(notif);
 
     // Update user profile and add address to saved addresses
     const userDoc = await User.findById(req.user._id);

@@ -71,18 +71,25 @@ const sendPushNotifications = async (tokens, title, body, data = {}) => {
 };
 
 const emitNotification = async (notification) => {
-  if (!io) return;
+  if (!io) {
+    console.log('Socket.io not initialized, cannot emit notification');
+    return;
+  }
   const n = notification.toObject ? notification.toObject() : notification;
 
   if (n.forAdmin) {
+    console.log(`Emitting admin notification: ${n.title}`);
     io.to('admin').emit('notification', n);
 
     // Send push to admins
     try {
-      const admins = await User.find({ role: 'admin', pushToken: { $exists: true, $ne: null } });
-      const tokens = admins.map(u => u.pushToken);
+      const admins = await User.find({ role: 'admin', pushToken: { $exists: true, $ne: '' } });
+      console.log(`Found ${admins.length} admins to notify via push`);
+      const tokens = admins.map(u => u.pushToken).filter(t => t && t.startsWith('ExponentPushToken'));
+      console.log(`Valid admin push tokens: ${tokens.length}`);
+
       if (tokens.length > 0) {
-        await sendPushNotifications(tokens, n.title || 'Admin Alert', n.body, n);
+        await sendPushNotifications(tokens, n.title || 'Admin Alert', n.body, { loanId: n.loanId, type: n.type });
       }
     } catch (e) {
       console.error('Admin Push Error:', e);
@@ -90,13 +97,17 @@ const emitNotification = async (notification) => {
 
   } else if (n.userId) {
     const uid = n.userId._id || n.userId;
+    console.log(`Emitting user notification to user:${uid}: ${n.title}`);
     io.to(`user:${uid}`).emit('notification', n);
 
     // Send push to user
     try {
       const user = await User.findById(uid);
-      if (user && user.pushToken) {
-        await sendPushNotifications([user.pushToken], n.title || 'LoanSnap', n.body, n);
+      if (user && user.pushToken && user.pushToken.startsWith('ExponentPushToken')) {
+        console.log(`Sending push notification to user ${uid}`);
+        await sendPushNotifications([user.pushToken], n.title || 'LoanSnap', n.body, { loanId: n.loanId, type: n.type });
+      } else {
+        console.log(`User ${uid} has no valid push token`);
       }
     } catch (e) {
       console.error('User Push Error:', e);

@@ -202,23 +202,11 @@ router.put('/loans/:id/approve', async (req, res) => {
       title: 'Loan Approved',
       body: `Your loan of ₹${loan.amount.toLocaleString('en-IN')} has been approved.`,
     });
-    const io = getIO();
-    if (io) io.to(`user:${loan.userId}`).emit('notification', notif.toObject());
 
-    // Send push notification to the user
-    try {
-      const user = await User.findById(loan.userId).select('pushToken');
-      if (user && user.pushToken) {
-        await sendPushNotification(
-          user.pushToken,
-          'Loan Approved',
-          `Your loan of ₹${loan.amount.toLocaleString('en-IN')} has been approved!`,
-          { loanId: loan._id, type: 'loan_approved' }
-        );
-      }
-    } catch (pushErr) {
-      console.error('Push notification error:', pushErr);
-    }
+    // Use centralized notification emitter
+    const { emitNotification } = require('../socket');
+    await emitNotification(notif);
+
     res.json({
       message: 'Loan approved successfully',
       loan
