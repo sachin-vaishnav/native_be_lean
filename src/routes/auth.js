@@ -6,7 +6,7 @@ const User = require('../models/User');
 const router = express.Router();
 
 // Brevo API Configuration
-const BREVO_API_KEY = process.env.SMTP_PASS; // Using the key provided in SMTP_PASS
+const BREVO_API_KEY = process.env.BREVO_API_KEY || process.env.SMTP_PASS;
 const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
 
 // Generate random 4-digit OTP
